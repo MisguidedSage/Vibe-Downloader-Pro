@@ -1,0 +1,31 @@
+﻿# UTF-8
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 1, 0),
+    prodvers=(1, 0, 1, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [
+          StringStruct('CompanyName', 'InFinite Studios Canada'),
+          StringStruct('FileDescription', 'Vibe Downloader Pro'),
+          StringStruct('FileVersion', '1.0.1'),
+          StringStruct('InternalName', 'Vibe Downloader Pro'),
+          StringStruct('OriginalFilename', 'Vibe Downloader Pro.exe'),
+          StringStruct('ProductName', 'Vibe Downloader Pro'),
+          StringStruct('ProductVersion', '1.0.1'),
+          StringStruct('LegalCopyright', 'MIT Licensed')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)

@@ -1,4 +1,43 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build output
 build/
 dist/
+Output/
+
+# PyInstaller generated files
 *.spec
-__pycache__/
+
+# Logs / transcripts
+*.log
+TerminalLog.txt
+TerminalLog*.txt
+
+# Local backups / experiments
+*.backup*
+*.bak
+*.before_*
+*_backup*
+*_BACKUP*
+*_old*
+*_OLD*
+_script_backup_before_baseline_copy/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Release packages should go in GitHub Releases
+*.zip
+*Setup*.exe
+*Portable*.exe
+*Installer*.exe
+
+# Local rollback backups
+_rollback_backups/
