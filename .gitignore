@@ -41,3 +41,12 @@ Thumbs.db
 
 # Local rollback backups
 _rollback_backups/
+
+# Local build output / release assets
+release/
+bin/
+VDLP_*Report.txt
+# Local project backups / transcripts
+3_ROLLBACK_BACK_UP/
+VDLP_CONVO_LOGS.txt
+VDLP_TASKS_PATCHES_UPDATES.txt

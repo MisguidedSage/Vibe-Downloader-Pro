@@ -18,8 +18,8 @@ import yt_dlp
 
 
 APP_NAME = "Vibe Downloader Pro"
-APP_VERSION = "1.0.1"
-APP_ID = "InFiniteStudios.VibeDownloaderPro.v101"
+APP_VERSION = "1.0.2"
+APP_ID = "InFiniteStudios.VibeDownloaderPro.v102"
 APP_ICON_FILENAME = "VDL_PRO_ICO.ico"
 
 GITHUB_OWNER = "MisguidedSage"
@@ -288,25 +288,118 @@ def get_ffmpeg_location():
     return None
 
 
-def get_format_string(selected_quality):
-    if selected_quality == "1080":
-        return "bestvideo[height<=1080]+bestaudio/best"
-    if selected_quality == "720":
-        return "bestvideo[height<=720]+bestaudio/best"
-    if selected_quality == "worst":
-        return "worst"
+def get_video_format_string(selected_quality, selected_video_format):
+    height_filter = ""
 
-    return "bestvideo+bestaudio/best"
+    if selected_quality and selected_quality != "best":
+        height_filter = f"[height<={selected_quality}]"
+
+    if selected_video_format == "mp4":
+        return (
+            f"bestvideo{height_filter}[ext=mp4]+bestaudio[ext=m4a]/"
+            f"bestvideo{height_filter}+bestaudio/"
+            f"best{height_filter}[ext=mp4]/best{height_filter}/best"
+        )
+
+    if selected_video_format == "webm":
+        return (
+            f"bestvideo{height_filter}[ext=webm]+bestaudio[ext=webm]/"
+            f"bestvideo{height_filter}+bestaudio/"
+            f"best{height_filter}[ext=webm]/best{height_filter}/best"
+        )
+
+    if selected_video_format == "mkv":
+        return f"bestvideo{height_filter}+bestaudio/best{height_filter}/best"
+
+    return f"bestvideo{height_filter}+bestaudio/best{height_filter}/best"
+
+
+def get_audio_quality_value(selected_audio_quality):
+    if selected_audio_quality == "best":
+        return "0"
+
+    return selected_audio_quality or "192"
+
+
+def parse_urls_from_text(value):
+    if not value:
+        return []
+
+    candidates = re.split(r"\s+", value.strip())
+    urls = []
+
+    for candidate in candidates:
+        cleaned = candidate.strip()
+
+        if cleaned:
+            urls.append(cleaned)
+
+    return urls
 
 
 def strip_ansi(value):
     if value is None:
         return ""
 
-    return re.sub(r"\x1b\[[0-9;]*m", "", str(value)).strip()
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    return ansi_escape.sub("", str(value)).strip()
+
+
+def is_youtube_url(value):
+    cleaned = str(value or "").lower()
+    return "youtube.com" in cleaned or "youtu.be" in cleaned
+
+
+def is_youtube_auth_error(value):
+    cleaned = strip_ansi(value).lower()
+
+    trigger_phrases = [
+        "sign in to confirm",
+        "not a bot",
+        "use --cookies-from-browser",
+        "cookies for the authentication",
+        "confirm you're not a bot",
+        "confirm you are not a bot",
+    ]
+
+    return any(phrase in cleaned for phrase in trigger_phrases)
+
+
+def clean_download_error_message(value):
+    cleaned = strip_ansi(value)
+
+    if is_youtube_auth_error(cleaned):
+        return (
+            "YouTube requested sign-in / bot verification. "
+            "The app tried browser cookies where possible. "
+            "Failed jobs stayed saved in the queue for retry."
+        )
+
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    if len(cleaned) > 220:
+        cleaned = cleaned[:217] + "..."
+
+    return cleaned
+
+
+def get_auto_cookie_browsers():
+    return ["edge", "chrome", "brave", "firefox"]
+
+
+def get_cookie_browser_label(browser_name):
+    labels = {
+        "edge": "Edge",
+        "chrome": "Chrome",
+        "brave": "Brave",
+        "firefox": "Firefox",
+    }
+
+    return labels.get(browser_name, browser_name)
 
 
 def safe_percent_from_hook(data):
+
     percent_text = strip_ansi(data.get("_percent_str"))
 
     if percent_text:
@@ -327,6 +420,7 @@ def safe_percent_from_hook(data):
 
 def main(page: ft.Page):
     page.title = APP_NAME
+    page.scroll = ft.ScrollMode.AUTO
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 24
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
@@ -362,36 +456,110 @@ def main(page: ft.Page):
     download_log_entries = []
     warning_count = {"count": 0}
     download_in_progress = {"active": False}
+    QUEUE_MODES = ["Audio", "Video", "Audio Playlist", "Video Playlist"]
+    download_queues = {mode: [] for mode in QUEUE_MODES}
     download_progress_state = {
         "is_playlist": False,
         "completed": 0,
         "total": 0,
         "current_index": 0,
     }
+    download_error_state = {
+        "youtube_auth": False,
+    }
     smooth_progress_state = {
         "active": False,
         "target": 0.0,
         "displayed": 0.0,
         "detail": "Waiting...",
+        "last_ui_update": 0.0,
     }
 
     url_input = ft.TextField(
-        label="Paste URL Here",
-        hint_text="https://...",
+        label="Paste URL(s) Here",
+        hint_text="Paste one URL or multiple URLs",
         autofocus=True,
         width=620,
     )
 
-    quality_dropdown = ft.Dropdown(
-        label="Select Video Quality",
-        width=300,
+    audio_quality_dropdown = ft.Dropdown(
+        label="Audio Quality",
+        width=260,
         options=[
             ft.dropdown.Option("best", text="Best Quality"),
-            ft.dropdown.Option("1080", text="HD 1080p"),
-            ft.dropdown.Option("720", text="Standard 720p"),
-            ft.dropdown.Option("worst", text="Data Saver"),
+            ft.dropdown.Option("320", text="320 kbps"),
+            ft.dropdown.Option("256", text="256 kbps"),
+            ft.dropdown.Option("192", text="192 kbps"),
+            ft.dropdown.Option("128", text="128 kbps"),
         ],
         value="best",
+    )
+
+    audio_format_dropdown = ft.Dropdown(
+        label="Audio Format",
+        width=260,
+        options=[
+            ft.dropdown.Option("mp3", text="MP3"),
+            ft.dropdown.Option("m4a", text="M4A"),
+            ft.dropdown.Option("opus", text="OPUS"),
+            ft.dropdown.Option("wav", text="WAV"),
+            ft.dropdown.Option("flac", text="FLAC"),
+        ],
+        value="mp3",
+    )
+
+    video_quality_dropdown = ft.Dropdown(
+        label="Video Quality",
+        width=260,
+        options=[
+            ft.dropdown.Option("best", text="Best Quality"),
+            ft.dropdown.Option("2160", text="2160p / 4K"),
+            ft.dropdown.Option("1440", text="1440p / 2K"),
+            ft.dropdown.Option("1080", text="1080p"),
+            ft.dropdown.Option("720", text="720p"),
+            ft.dropdown.Option("480", text="480p"),
+            ft.dropdown.Option("360", text="360p"),
+        ],
+        value="best",
+    )
+
+    video_format_dropdown = ft.Dropdown(
+        label="Video Format",
+        width=260,
+        options=[
+            ft.dropdown.Option("auto", text="Best / Auto"),
+            ft.dropdown.Option("mp4", text="MP4"),
+            ft.dropdown.Option("webm", text="WEBM"),
+            ft.dropdown.Option("mkv", text="MKV"),
+        ],
+        value="mp4",
+    )
+
+    queue_speed_dropdown = ft.Dropdown(
+        label="Queue Speed",
+        width=260,
+        options=[
+            ft.dropdown.Option("normal", text="Normal"),
+            ft.dropdown.Option("gentle", text="Gentle / Fewer Bot Checks"),
+        ],
+        value="normal",
+    )
+
+    queue_count_text = ft.Text(
+        value="Queued links: 0",
+        size=12,
+        color="#BDBDBD",
+        text_align=ft.TextAlign.CENTER,
+        width=620,
+    )
+
+    queue_preview_text = ft.Text(
+        value="No queued links yet.",
+        size=10,
+        color="#9E9E9E",
+        text_align=ft.TextAlign.CENTER,
+        width=620,
+        selectable=True,
     )
 
     progress_title = ft.Text(
@@ -482,10 +650,22 @@ def main(page: ft.Page):
         ),
     )
 
+    def safe_page_update():
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def run_background_task(target):
+        try:
+            page.run_thread(target)
+        except Exception:
+            threading.Thread(target=target, daemon=True).start()
+
     def set_status(message, color="#BDBDBD"):
         status_text.value = message
         status_text.color = color
-        page.update()
+        safe_page_update()
 
     def reset_log():
         download_log_entries.clear()
@@ -496,7 +676,7 @@ def main(page: ft.Page):
         log_text.value = ""
 
     def append_log(message, count_warning=True):
-        cleaned = strip_ansi(message)
+        cleaned = clean_download_error_message(message)
 
         if not cleaned:
             return
@@ -504,17 +684,283 @@ def main(page: ft.Page):
         if count_warning:
             warning_count["count"] += 1
 
+        if cleaned in download_log_entries:
+            return
+
         download_log_entries.append(cleaned)
 
         if len(download_log_entries) > 12:
             download_log_entries.pop(0)
 
-        log_text.value = "\n".join(f"• {entry}" for entry in download_log_entries)
+        log_text.value = "\n".join(f"- {entry}" for entry in download_log_entries)
         log_title.visible = True
         log_text.visible = True
         log_panel.visible = True
-        page.update()
 
+        try:
+            safe_page_update()
+        except Exception:
+            pass
+
+
+
+    def get_download_root():
+
+        downloads_path = Path.home() / "Downloads"
+        app_downloads_path = downloads_path / APP_NAME
+        app_downloads_path.mkdir(parents=True, exist_ok=True)
+        return app_downloads_path
+
+    def get_queue_cache_path():
+        cache_dir = get_download_root() / "_app_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir / "queue_cache.json"
+
+    def get_current_queue_settings(mode):
+        return {
+            "audio_quality": audio_quality_dropdown.value or "best",
+            "audio_format": audio_format_dropdown.value or "mp3",
+            "video_quality": video_quality_dropdown.value or "best",
+            "video_format": video_format_dropdown.value or "mp4",
+        }
+
+    def make_queue_job(mode, url):
+        settings = get_current_queue_settings(mode)
+
+        return {
+            "mode": mode,
+            "url": url,
+            "audio_quality": settings["audio_quality"],
+            "audio_format": settings["audio_format"],
+            "video_quality": settings["video_quality"],
+            "video_format": settings["video_format"],
+            "status": "pending",
+            "added_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    def get_audio_quality_label(value):
+        labels = {
+            "best": "Best Quality",
+            "320": "320 kbps",
+            "256": "256 kbps",
+            "192": "192 kbps",
+            "128": "128 kbps",
+        }
+
+        return labels.get(value, value or "192 kbps")
+
+    def get_video_quality_label(value):
+        labels = {
+            "best": "Best Quality",
+            "2160": "2160p / 4K",
+            "1440": "1440p / 2K",
+            "1080": "1080p",
+            "720": "720p",
+            "480": "480p",
+            "360": "360p",
+        }
+
+        return labels.get(value, value or "Best Quality")
+
+    def job_summary(job):
+        mode = job.get("mode", "")
+        url = job.get("url", "")
+
+        if len(url) > 58:
+            url = url[:55] + "..."
+
+        status_prefix = "FAILED | " if job.get("status") == "failed" else ""
+
+        if mode in ["Audio", "Audio Playlist"]:
+            quality = get_audio_quality_label(job.get("audio_quality"))
+            fmt = (job.get("audio_format") or "mp3").upper()
+            return f"{status_prefix}{fmt} | {quality} | {url}"
+
+        quality = get_video_quality_label(job.get("video_quality"))
+        fmt = (job.get("video_format") or "mp4").upper()
+        return f"{status_prefix}{fmt} | {quality} | {url}"
+
+    queue_count_texts = {}
+
+    queue_preview_texts = {}
+
+    def save_queue_cache():
+        try:
+            cache_path = get_queue_cache_path()
+            temp_path = cache_path.with_suffix(".tmp")
+
+            payload = {
+                "schema_version": 1,
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "queues": download_queues,
+            }
+
+            with open(temp_path, "w", encoding="utf-8") as cache_file:
+                json.dump(payload, cache_file, indent=2)
+
+            os.replace(temp_path, cache_path)
+
+        except Exception as ex:
+            append_log(f"Queue cache save failed: {str(ex)[:120]}", count_warning=True)
+
+    def load_queue_cache():
+        try:
+            cache_path = get_queue_cache_path()
+
+            if not cache_path.exists():
+                return 0
+
+            with open(cache_path, "r", encoding="utf-8") as cache_file:
+                payload = json.load(cache_file)
+
+            queues = payload.get("queues") or {}
+            recovered = 0
+
+            for mode in QUEUE_MODES:
+                download_queues[mode].clear()
+
+                for job in queues.get(mode, []):
+                    if isinstance(job, dict) and job.get("url"):
+                        job["mode"] = mode
+                        download_queues[mode].append(job)
+                        recovered += 1
+
+            return recovered
+
+        except Exception as ex:
+            append_log(f"Queue cache load failed: {str(ex)[:120]}", count_warning=True)
+            return 0
+
+    def update_queue_display():
+        for mode in QUEUE_MODES:
+            queue = download_queues.get(mode, [])
+            count_text = queue_count_texts.get(mode)
+            preview_text = queue_preview_texts.get(mode)
+
+            if count_text:
+                count_text.value = f"Queued: {len(queue)}"
+
+            if preview_text:
+                if queue:
+                    preview_items = []
+
+                    for index, job in enumerate(queue[:4], start=1):
+                        preview_items.append(f"{index}. {job_summary(job)}")
+
+                    if len(queue) > 4:
+                        preview_items.append(f"...and {len(queue) - 4} more")
+
+                    preview_text.value = "\n".join(preview_items)
+                else:
+                    preview_text.value = "No queued links."
+
+        try:
+            safe_page_update()
+        except Exception:
+            pass
+
+    def add_to_queue(mode, e=None):
+        urls = parse_urls_from_text(url_input.value)
+
+        if not urls:
+            set_status("Paste one or more URLs first.", "#FFCC80")
+            return
+
+        added_count = 0
+
+        for url in urls:
+            duplicate = any(existing.get("url") == url for existing in download_queues[mode])
+
+            if not duplicate:
+                download_queues[mode].append(make_queue_job(mode, url))
+                added_count += 1
+
+        url_input.value = ""
+        save_queue_cache()
+        update_queue_display()
+
+        if added_count == 1:
+            set_status(f"Added 1 link to the {mode} queue.", "#90CAF9")
+        else:
+            set_status(f"Added {added_count} links to the {mode} queue.", "#90CAF9")
+
+    def clear_queue(mode, e=None):
+        download_queues[mode].clear()
+        save_queue_cache()
+        update_queue_display()
+        set_status(f"{mode} queue cleared.", "#BDBDBD")
+
+    def build_queue_panel(mode, title):
+        count_text = ft.Text(
+            value="Queued: 0",
+            size=11,
+            color="#BDBDBD",
+            text_align=ft.TextAlign.CENTER,
+            width=280,
+        )
+
+        preview_text = ft.Text(
+            value="No queued links.",
+            size=9,
+            color="#9E9E9E",
+            text_align=ft.TextAlign.CENTER,
+            width=280,
+            selectable=True,
+        )
+
+        queue_count_texts[mode] = count_text
+        queue_preview_texts[mode] = preview_text
+
+        return ft.Container(
+            width=300,
+            padding=10,
+            border_radius=16,
+            bgcolor="#101418",
+            content=ft.Column(
+                [
+                    ft.Text(
+                        title,
+                        size=12,
+                        weight="bold",
+                        color="#90CAF9",
+                        text_align=ft.TextAlign.CENTER,
+                        width=280,
+                    ),
+                    count_text,
+                    preview_text,
+                    ft.Row(
+                        [
+                            ft.ElevatedButton(
+                                "Download Queue",
+                                on_click=lambda _, m=mode: run_download(m, use_queue=True),
+                                width=135,
+                            ),
+                            ft.ElevatedButton(
+                                "Clear",
+                                on_click=lambda _, m=mode: clear_queue(m),
+                                width=85,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=8,
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=5,
+            ),
+        )
+
+    audio_queue_panel = build_queue_panel("Audio", "AUDIO QUEUE")
+    video_queue_panel = build_queue_panel("Video", "VIDEO QUEUE")
+    audio_playlist_queue_panel = build_queue_panel("Audio Playlist", "AUDIO PLAYLIST QUEUE")
+    video_playlist_queue_panel = build_queue_panel("Video Playlist", "VIDEO PLAYLIST QUEUE")
+
+    recovered_jobs = load_queue_cache()
+    update_queue_display()
+
+    if recovered_jobs:
+        status_text.value = f"Recovered {recovered_jobs} queued job(s) from the last session."
+        status_text.color = "#90CAF9"
     class AppLogger:
         def debug(self, msg):
             pass
@@ -537,10 +983,19 @@ def main(page: ft.Page):
             if any(phrase.lower() in cleaned.lower() for phrase in ignored_phrases):
                 return
 
+            if is_youtube_auth_error(cleaned):
+                download_error_state["youtube_auth"] = True
+                append_log(
+                    "YouTube requested sign-in / bot verification. Retrying with signed-in browser cookies if possible.",
+                    count_warning=True,
+                )
+                return
+
             if cleaned:
                 append_log(f"Skipped/Error: {cleaned}", count_warning=True)
 
     def clamp_progress(value):
+
         try:
             value = float(value)
         except Exception:
@@ -548,13 +1003,36 @@ def main(page: ft.Page):
 
         return max(0.0, min(value, 1.0))
 
-    def set_progress_target(value, detail=None):
-        smooth_progress_state["target"] = clamp_progress(value)
+    def set_progress_target(value, detail=None, force=False):
+        value = clamp_progress(value)
+
+        smooth_progress_state["target"] = value
+        smooth_progress_state["displayed"] = value
+
+        progress_bar.value = value
+
+        if value >= 0.995:
+            progress_percent_text.value = "Complete"
+        else:
+            progress_percent_text.value = f"{value * 100:.1f}%"
 
         if detail is not None:
             smooth_progress_state["detail"] = detail
+            progress_detail_text.value = detail
+
+        now = time.time()
+        last_update = smooth_progress_state.get("last_ui_update", 0.0)
+
+        if force or (now - last_update) >= 0.08:
+            smooth_progress_state["last_ui_update"] = now
+
+            try:
+                safe_page_update()
+            except Exception:
+                pass
 
     def start_progress_animator():
+
         smooth_progress_state["active"] = True
         smooth_progress_state["target"] = 0.0
         smooth_progress_state["displayed"] = 0.0
@@ -601,10 +1079,10 @@ def main(page: ft.Page):
                 else:
                     progress_detail_text.value = detail
 
-                page.update()
-                time.sleep(0.12)
+                safe_page_update()
+                time.sleep(0.05)
 
-        threading.Thread(target=animator, daemon=True).start()
+        run_background_task(animator)
 
     def stop_progress_animator():
         smooth_progress_state["target"] = 1.0
@@ -626,7 +1104,7 @@ def main(page: ft.Page):
         status_text.color = "#BDBDBD"
 
         start_progress_animator()
-        page.update()
+        safe_page_update()
     def progress_hook(d):
         status = d.get("status")
         info = d.get("info_dict") or {}
@@ -692,7 +1170,7 @@ def main(page: ft.Page):
                 if eta:
                     detail_parts.append(f"ETA: {eta}")
 
-                set_progress_target(overall_value, "  •  ".join(detail_parts))
+                set_progress_target(overall_value, "  |  ".join(detail_parts), force=True)
                 status_text.value = f"Downloading playlist... {overall_percent} overall"
                 status_text.color = "#BDBDBD"
 
@@ -708,11 +1186,11 @@ def main(page: ft.Page):
                 if eta:
                     detail_parts.append(f"ETA: {eta}")
 
-                set_progress_target(current_file_value, "  •  ".join(detail_parts))
+                set_progress_target(current_file_value, "  |  ".join(detail_parts), force=True)
                 status_text.value = f"Downloading... {current_file_percent}"
                 status_text.color = "#BDBDBD"
 
-            page.update()
+            safe_page_update()
 
         elif status == "finished":
             progress_panel.visible = True
@@ -730,22 +1208,29 @@ def main(page: ft.Page):
                 set_progress_target(
                     overall_value,
                     f"{item_label} downloaded. Processing with FFmpeg: {short_name}",
+                    force=True,
                 )
 
                 status_text.value = f"Processing item {completed_items}/{total_items} with FFmpeg..."
                 status_text.color = "#BDBDBD"
 
             else:
-                set_progress_target(1.0, f"Finished download: {short_name}")
+                set_progress_target(1.0, f"Finished download: {short_name}", force=True)
                 status_text.value = "Processing with FFmpeg..."
                 status_text.color = "#BDBDBD"
 
-            page.update()
-    def build_ydl_options(mode):
-        selected_quality = quality_dropdown.value
+            safe_page_update()
+    def build_ydl_options(mode, settings=None, browser_cookie_source=None):
+        if settings is None:
+            settings = get_current_queue_settings(mode)
+
+        selected_audio_quality = settings.get("audio_quality") or "best"
+        selected_audio_format = settings.get("audio_format") or "mp3"
+        selected_video_quality = settings.get("video_quality") or "best"
+        selected_video_format = settings.get("video_format") or "mp4"
+
         ffmpeg_location = get_updated_ffmpeg_location() or get_ffmpeg_location()
-        downloads_path = Path.home() / "Downloads"
-        app_downloads_path = downloads_path / APP_NAME
+        app_downloads_path = get_download_root()
 
         is_audio = mode in ["Audio", "Audio Playlist"]
         is_playlist = mode in ["Audio Playlist", "Video Playlist"]
@@ -774,6 +1259,14 @@ def main(page: ft.Page):
             "extractor_retries": 3,
         }
 
+        if queue_speed_dropdown.value == "gentle":
+            ydl_opts["sleep_interval_requests"] = 0.75
+            ydl_opts["sleep_interval"] = 5
+            ydl_opts["max_sleep_interval"] = 12
+
+        if browser_cookie_source:
+            ydl_opts["cookiesfrombrowser"] = (browser_cookie_source, None, None, None)
+
         if ffmpeg_location:
             ydl_opts["ffmpeg_location"] = ffmpeg_location
 
@@ -783,16 +1276,16 @@ def main(page: ft.Page):
                 "postprocessors": [
                     {
                         "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192",
+                        "preferredcodec": selected_audio_format,
+                        "preferredquality": get_audio_quality_value(selected_audio_quality),
                     }
                 ],
             })
         else:
-            ydl_opts.update({
-                "format": f"{get_format_string(selected_quality)}/best",
-                "merge_output_format": "mp4",
-            })
+            ydl_opts["format"] = get_video_format_string(selected_video_quality, selected_video_format)
+
+            if selected_video_format in ["mp4", "webm", "mkv"]:
+                ydl_opts["merge_output_format"] = selected_video_format
 
         if is_playlist:
             ydl_opts["noplaylist"] = False
@@ -801,33 +1294,159 @@ def main(page: ft.Page):
             ydl_opts["playlist_items"] = "1"
 
         return ydl_opts
-    def run_download(mode):
+
+    def download_job_with_auto_retries(mode, job, current_url, job_label):
+        last_error = None
+
+        def try_download(browser_cookie_source=None):
+            download_error_state["youtube_auth"] = False
+
+            ydl_opts = build_ydl_options(
+                mode,
+                job,
+                browser_cookie_source=browser_cookie_source,
+            )
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([current_url])
+
+            if download_error_state.get("youtube_auth"):
+                raise RuntimeError("YouTube requested sign-in / bot verification.")
+
+        try:
+            try_download()
+            return True, None
+
+        except Exception as first_ex:
+            last_error = first_ex
+
+            if not is_youtube_auth_error(str(first_ex)):
+                return False, clean_download_error_message(first_ex)
+
+            set_status(
+                "YouTube requested sign-in / bot verification. Retrying with browser cookies...",
+                "#FFCC80",
+            )
+            append_log(
+                "YouTube requested sign-in / bot verification. Retrying with signed-in browser cookies if possible.",
+                count_warning=False,
+            )
+
+            for browser_name in get_auto_cookie_browsers():
+                browser_label = get_cookie_browser_label(browser_name)
+
+                try:
+                    set_status(f"Retrying {job_label} using {browser_label} cookies...", "#FFCC80")
+                    set_progress_target(0.05, f"Trying {browser_label} cookies", force=True)
+
+                    try_download(browser_cookie_source=browser_name)
+
+                    append_log(f"Cookie retry succeeded using {browser_label}.", count_warning=False)
+                    return True, None
+
+                except Exception as cookie_ex:
+                    last_error = cookie_ex
+                    continue
+
+            return False, clean_download_error_message(last_error)
+
+    def run_download(mode, use_queue=False):
         if download_in_progress["active"]:
             set_status("A download is already running. Please wait for it to finish.", "#FFCC80")
             return
 
-        if not url_input.value:
-            set_status("Error: No URL provided.", "#EF5350")
-            return
+        if use_queue:
+            jobs_to_download = list(download_queues[mode])
+
+            if not jobs_to_download:
+                set_status(f"{mode} queue is empty.", "#FFCC80")
+                return
+        else:
+            urls_to_download = parse_urls_from_text(url_input.value)
+
+            if not urls_to_download:
+                set_status("Error: No URL provided.", "#EF5350")
+                return
+
+            jobs_to_download = [make_queue_job(mode, url) for url in urls_to_download]
 
         download_in_progress["active"] = True
 
         reset_log()
         show_progress_start(mode)
 
-        if mode in ["Audio Playlist", "Video Playlist"]:
+        total_jobs = len(jobs_to_download)
+
+        if use_queue:
+            set_status(f"Starting {mode} queue: {total_jobs} job(s).")
+        elif total_jobs > 1:
+            set_status(f"Starting {mode}: {total_jobs} pasted links.")
+        elif mode in ["Audio Playlist", "Video Playlist"]:
             set_status(f"Starting {mode}. Broken/unavailable items will be skipped.")
         else:
             set_status(f"Starting {mode}. Single item mode is enabled.")
 
-        page.update()
+        safe_page_update()
 
         def worker():
-            try:
-                ydl_opts = build_ydl_options(mode)
+            failed_jobs = []
+            success_count = 0
 
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url_input.value])
+            try:
+                for index, job in enumerate(jobs_to_download, start=1):
+                    current_url = (job.get("url") or "").strip()
+
+                    if not current_url:
+                        continue
+
+                    job["status"] = "downloading"
+                    job["last_error"] = ""
+
+                    job_label = f"job {index}/{total_jobs}"
+
+                    if total_jobs > 1:
+                        set_status(f"{mode}: downloading {job_label}", "#BDBDBD")
+                        set_progress_target(0.03, f"Starting {job_label}", force=True)
+                        safe_page_update()
+
+                    if queue_speed_dropdown.value == "gentle" and index > 1:
+                        set_status("Gentle mode: waiting briefly before next job...", "#BDBDBD")
+                        set_progress_target(0.04, "Gentle mode delay", force=True)
+                        time.sleep(6)
+
+                    success, error_message = download_job_with_auto_retries(
+                        mode,
+                        job,
+                        current_url,
+                        job_label,
+                    )
+
+                    if success:
+                        success_count += 1
+                        job["status"] = "completed"
+                        job["last_error"] = ""
+
+                        if use_queue and job in download_queues[mode]:
+                            download_queues[mode].remove(job)
+                            save_queue_cache()
+                            update_queue_display()
+                    else:
+                        job["status"] = "failed"
+                        job["last_error"] = error_message or "Download failed."
+                        failed_jobs.append(job)
+                        append_log(f"{mode} {job_label} failed: {job['last_error']}", count_warning=True)
+
+                        if not use_queue:
+                            duplicate = any(
+                                existing.get("url") == job.get("url")
+                                for existing in download_queues[mode]
+                            )
+
+                            if not duplicate:
+                                download_queues[mode].append(job)
+
+                        save_queue_cache()
+                        update_queue_display()
 
                 progress_panel.visible = True
                 progress_bar.value = 1
@@ -837,29 +1456,40 @@ def main(page: ft.Page):
                 completed_items = download_progress_state.get("completed", 0)
 
                 if download_progress_state.get("is_playlist") and total_items:
-                    progress_detail_text.value = f"Complete — {completed_items}/{total_items} items processed."
+                    progress_detail_text.value = f"Finished playlist: {completed_items}/{total_items} items processed"
+                elif total_jobs > 1:
+                    progress_detail_text.value = f"Finished jobs: {success_count}/{total_jobs} completed"
                 else:
-                    progress_detail_text.value = "Complete."
+                    progress_detail_text.value = "Download finished"
 
-                if warning_count["count"] > 0:
-                    set_status(
-                        f"Complete with {warning_count['count']} skipped/error item(s).",
-                        "#FFCC80",
-                    )
+                if failed_jobs and success_count:
+                    set_status(f"Done with warnings: {success_count}/{total_jobs} completed. Failed jobs stayed saved for retry.", "#FFCC80")
+                elif failed_jobs and not success_count:
+                    set_status("Download failed. Jobs stayed saved for retry.", "#EF5350")
+                elif use_queue:
+                    set_status(f"Success! Completed {success_count}/{total_jobs} {mode} queued job(s).", "#66BB6A")
+                elif total_jobs > 1:
+                    set_status(f"Success! Completed {success_count}/{total_jobs} pasted link(s).", "#66BB6A")
                 else:
                     set_status("Success! Check your Downloads folder.", "#66BB6A")
 
+                save_queue_cache()
+                update_queue_display()
+
             except Exception as ex:
-                stop_progress_animator()
-                append_log(str(ex), count_warning=True)
-                set_status(f"Error: {str(ex)[:160]}", "#EF5350")
+                set_status(f"Error: {clean_download_error_message(ex)}", "#EF5350")
+                save_queue_cache()
+                update_queue_display()
 
             finally:
                 download_in_progress["active"] = False
-                page.update()
+                stop_progress_animator()
+                safe_page_update()
 
-        threading.Thread(target=worker, daemon=True).start()
+        run_background_task(worker)
+
     def icon_control(mode):
+
         icon_path = icon_cache.get(mode)
 
         if icon_path:
@@ -880,23 +1510,28 @@ def main(page: ft.Page):
     def build_button_card(label, mode):
         return ft.Container(
             width=260,
-            height=190,
-            padding=16,
-            border_radius=18,
+            height=230,
+            padding=14,
             bgcolor="#1E1E1E",
+            border_radius=18,
             content=ft.Column(
                 [
                     icon_control(mode),
-                    ft.Text(label, weight="bold", size=14, color="#FFFFFF"),
+                    ft.Text(label, weight="bold", color="#FFFFFF", text_align=ft.TextAlign.CENTER),
                     ft.ElevatedButton(
-                        "DOWNLOAD",
-                        width=165,
-                        on_click=lambda _: run_download(mode),
+                        "DOWNLOAD NOW",
+                        width=170,
+                        on_click=lambda _, m=mode: run_download(m, use_queue=False),
+                    ),
+                    ft.ElevatedButton(
+                        "ADD TO QUEUE",
+                        width=170,
+                        on_click=lambda _, m=mode: add_to_queue(m),
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.CENTER,
-                spacing=8,
+                spacing=7,
             ),
         )
 
@@ -905,7 +1540,7 @@ def main(page: ft.Page):
         show_platforms_btn.text = (
             "Hide Sites" if platforms_list.visible else "Show Supported Sites"
         )
-        page.update()
+        safe_page_update()
 
 
     update_state = {
@@ -933,7 +1568,7 @@ def main(page: ft.Page):
         update_button.disabled = is_busy
 
         try:
-            page.update()
+            safe_page_update()
         except Exception:
             pass
 
@@ -942,7 +1577,7 @@ def main(page: ft.Page):
         update_status_text.color = color
 
         try:
-            page.update()
+            safe_page_update()
         except Exception:
             pass
 
@@ -952,7 +1587,7 @@ def main(page: ft.Page):
         update_button.disabled = False
 
         try:
-            page.update()
+            safe_page_update()
         except Exception:
             pass
 
@@ -1123,7 +1758,7 @@ def main(page: ft.Page):
         tool_update_button.disabled = is_busy
 
         try:
-            page.update()
+            safe_page_update()
         except Exception:
             pass
 
@@ -1132,7 +1767,7 @@ def main(page: ft.Page):
         tool_status_text.color = color
 
         try:
-            page.update()
+            safe_page_update()
         except Exception:
             pass
 
@@ -1301,7 +1936,7 @@ def main(page: ft.Page):
 
     platforms_list = ft.Column(
         [
-            ft.Text(f"• {platform}", size=11, color="#E0E0E0")
+            ft.Text(f"- {platform}", size=11, color="#E0E0E0")
             for platform in SUPPORTED_PLATFORMS
         ],
         visible=False,
@@ -1315,8 +1950,34 @@ def main(page: ft.Page):
                 ft.Text(APP_NAME, size=36, weight="bold", color="#90CAF9"),
                 ft.Divider(height=10, color="transparent"),
                 url_input,
-                quality_dropdown,
                 ft.Divider(height=10, color="transparent"),
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text("AUDIO SETTINGS", size=12, weight="bold", color="#90CAF9", text_align=ft.TextAlign.CENTER, width=260),
+                                ft.Divider(height=4, color="transparent"),
+                                audio_quality_dropdown,
+                                audio_format_dropdown,
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=8,
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text("VIDEO SETTINGS", size=12, weight="bold", color="#90CAF9", text_align=ft.TextAlign.CENTER, width=260),
+                                ft.Divider(height=4, color="transparent"),
+                                video_quality_dropdown,
+                                video_format_dropdown,
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=8,
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=40,
+                ),
+                ft.Divider(height=12, color="transparent"),
                 ft.Row(
                     [
                         build_button_card("AUDIO", "Audio"),
@@ -1335,6 +1996,24 @@ def main(page: ft.Page):
                 ),
                 ft.Divider(height=10, color="transparent"),
                 progress_panel,
+                ft.Text("QUEUES", size=14, weight="bold", color="#90CAF9", text_align=ft.TextAlign.CENTER, width=620),
+                queue_speed_dropdown,
+                ft.Row(
+                    [
+                        audio_queue_panel,
+                        video_queue_panel,
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=20,
+                ),
+                ft.Row(
+                    [
+                        audio_playlist_queue_panel,
+                        video_playlist_queue_panel,
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=20,
+                ),
                 status_text,
                 log_panel,
                 ft.Divider(height=8, color="transparent"),
@@ -1358,6 +2037,7 @@ def main(page: ft.Page):
 if __name__ == "__main__":
     configure_windows_app_identity()
     ft.app(target=main)
+
 
 
 

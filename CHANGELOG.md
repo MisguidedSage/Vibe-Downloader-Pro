@@ -1,55 +1,81 @@
 ﻿# Changelog
 
-## v1.0.1
+## v1.0.2
 
 ### Added
 
-- Four download modes:
-  - Audio
-  - Video
-  - Audio Playlist
-  - Video Playlist
-- Custom PNG icons for each download mode
-- Bundled FFmpeg and FFprobe support for packaged releases
-- Bundled yt-dlp support for packaged releases
-- Organized download folders
-- In-app progress panel
-- Cleaner footer version display
-- No-terminal PyInstaller build support
-- Custom app icon support for packaged EXE
-- Playlist skip handling for broken/unavailable items
-- Protection against accidental full playlist downloads when using single Audio or Video mode
-- GitHub Releases app updater
-- Tool updater support for yt-dlp / FFmpeg / FFprobe
-- Windows installer build using Inno Setup
-- MIT License file
+- Batch downloading support with mode-specific queues:
+  - Audio Queue
+  - Video Queue
+  - Audio Playlist Queue
+  - Video Playlist Queue
+- Persistent queue cache stored in the user's Downloads folder:
+  - `Downloads\Vibe Downloader Pro\_app_cache\queue_cache.json`
+- Separate audio quality selector:
+  - Best Quality
+  - 320 kbps
+  - 256 kbps
+  - 192 kbps
+  - 128 kbps
+- Separate audio format selector:
+  - MP3
+  - M4A
+  - OPUS
+  - WAV
+  - FLAC
+- Separate video quality selector:
+  - Best Quality
+  - 2160p / 4K
+  - 1440p / 2K
+  - 1080p
+  - 720p
+  - 480p
+  - 360p
+- Separate video format selector:
+  - Best / Auto
+  - MP4
+  - WEBM
+  - MKV
+- Queue Speed selector:
+  - Normal
+  - Gentle / Fewer Bot Checks
+- Automatic retry support for YouTube sign-in / bot-check errors using available signed-in browser cookies.
+- Failed queue jobs remain saved for retry instead of disappearing.
+- Queue recovery after app restart.
+- Scroll support for the larger desktop layout.
 
 ### Changed
 
-- Reworked layout from old three-option design to 2x2 download mode layout
-- Changed playlist downloads to separate playlist folders named after playlist title
-- Changed normal downloads to save into Audio or Video folders
-- Updated app version to v1.0.1
-- Removed old requirement for normal users to manually install FFmpeg
-- Updated README for installer-based release flow
+- Audio Quality now defaults to Best Quality instead of 192 kbps.
+- Reworked the workflow so each mode card has:
+  - Download Now
+  - Add To Queue
+- Replaced the single shared queue with separate queues for each download mode.
+- Queue jobs remember the selected quality and format settings from the moment they are added.
+- Completed queued jobs are removed after successful download.
+- Failed queued jobs stay visible and are marked as failed.
+- Cleaned YouTube bot-check error spam into shorter user-facing messages.
+- Improved progress update handling internally.
+- Cleaned supported-sites list formatting.
 
 ### Fixed
 
-- Fixed app launch issues caused by Flet image argument changes
-- Fixed footer showing local FFmpeg directory instead of version text
-- Fixed duplicate downloads between playlist folders and single-download folders
-- Fixed taskbar/window icon for packaged builds
-- Fixed terminal window requirement for packaged app builds
+- Fixed confusing single-queue behavior by splitting queues by download mode.
+- Fixed queue loss on app restart by adding persistent queue cache.
+- Fixed weird supported-sites bullet characters.
+- Fixed audio default quality behavior.
+- Fixed versioned v1.0.2 app metadata references.
+- Fixed installer source and output paths for v1.0.2.
+- Fixed Windows numeric file/product version metadata for v1.0.2 builds.
 
-### Known Issue
+### Known Issues
 
+- The progress bar may not visually update in real time when Vibe Downloader Pro is visible but not the active window.
+  - Downloads continue normally.
+  - Clicking back into the app usually refreshes the displayed progress.
 - Windows taskbar right-click menu may still show `Flet description` on some systems.
   - This is cosmetic only.
-  - Planned for v1.0.2.
 
-## Planned for v1.0.2
+## v1.0.1
 
-- Polish Windows taskbar right-click metadata
-- Further UI polish
-- More robust updater status messages
-- Optional updated user manual
+- Previous public GitHub release.
